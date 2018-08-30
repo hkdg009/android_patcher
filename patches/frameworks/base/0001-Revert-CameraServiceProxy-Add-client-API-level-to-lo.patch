@@ -1,0 +1,102 @@
+From 8d9026c2c1369cd36d1dd37ec58d76cff7bd05e9 Mon Sep 17 00:00:00 2001
+From: Artem Borisov <dedsa2002@gmail.com>
+Date: Mon, 13 Aug 2018 14:27:17 +0300
+Subject: [PATCH] Revert "CameraServiceProxy: Add client API level to log
+ metrics"
+
+This reverts commit 6bf0a5584d56b6e669aa110ee9a6278c8c915e4e.
+
+Change-Id: I9c67ba4db1b72797b0a4294d838441fafbbcdb30
+---
+ proto/src/metrics_constants.proto                        |  5 -----
+ .../com/android/server/camera/CameraServiceProxy.java    | 16 ++++++----------
+ 2 files changed, 6 insertions(+), 15 deletions(-)
+
+diff --git a/proto/src/metrics_constants.proto b/proto/src/metrics_constants.proto
+index 4328d94..749814b 100644
+--- a/proto/src/metrics_constants.proto
++++ b/proto/src/metrics_constants.proto
+@@ -5447,11 +5447,6 @@ message MetricsEvent {
+     // OS: P
+     PACKAGE_OPTIMIZATION_COMPILATION_REASON = 1321;
+ 
+-    // FIELD: The camera API level used.
+-    // CATEGORY: CAMERA
+-    // OS: P
+-    FIELD_CAMERA_API_LEVEL = 1322;
+-
+     // OPEN: Settings > Battery > Battery tip > Battery tip Dialog
+     // CATEGORY: SETTINGS
+     // OS: P
+diff --git a/services/core/java/com/android/server/camera/CameraServiceProxy.java b/services/core/java/com/android/server/camera/CameraServiceProxy.java
+index 0ee55ed..45d2375 100644
+--- a/services/core/java/com/android/server/camera/CameraServiceProxy.java
++++ b/services/core/java/com/android/server/camera/CameraServiceProxy.java
+@@ -103,15 +103,13 @@ public class CameraServiceProxy extends SystemService
+     private static class CameraUsageEvent {
+         public final int mCameraFacing;
+         public final String mClientName;
+-        public final int mAPILevel;
+ 
+         private boolean mCompleted;
+         private long mDurationOrStartTimeMs;  // Either start time, or duration once completed
+ 
+-        public CameraUsageEvent(int facing, String clientName, int apiLevel) {
++        public CameraUsageEvent(int facing, String clientName) {
+             mCameraFacing = facing;
+             mClientName = clientName;
+-            mAPILevel = apiLevel;
+             mDurationOrStartTimeMs = SystemClock.elapsedRealtime();
+             mCompleted = false;
+         }
+@@ -175,7 +173,7 @@ public class CameraServiceProxy extends SystemService
+ 
+         @Override
+         public void notifyCameraState(String cameraId, int newCameraState, int facing,
+-                String clientName, int apiLevel) {
++                String clientName) {
+             if (Binder.getCallingUid() != Process.CAMERASERVER_UID) {
+                 Slog.e(TAG, "Calling UID: " + Binder.getCallingUid() + " doesn't match expected " +
+                         " camera service UID!");
+@@ -184,9 +182,9 @@ public class CameraServiceProxy extends SystemService
+             String state = cameraStateToString(newCameraState);
+             String facingStr = cameraFacingToString(facing);
+             if (DEBUG) Slog.v(TAG, "Camera " + cameraId + " facing " + facingStr + " state now " +
+-                    state + " for client " + clientName + " API Level " + apiLevel);
++                    state + " for client " + clientName);
+ 
+-            updateActivityCount(cameraId, newCameraState, facing, clientName, apiLevel);
++            updateActivityCount(cameraId, newCameraState, facing, clientName);
+         }
+     };
+ 
+@@ -305,7 +303,6 @@ public class CameraServiceProxy extends SystemService
+                         .setType(MetricsEvent.TYPE_ACTION)
+                         .setSubtype(subtype)
+                         .setLatency(e.getDuration())
+-                        .addTaggedData(MetricsEvent.FIELD_CAMERA_API_LEVEL, e.mAPILevel)
+                         .setPackageName(e.mClientName);
+                 mLogger.write(l);
+             }
+@@ -386,8 +383,7 @@ public class CameraServiceProxy extends SystemService
+         return true;
+     }
+ 
+-    private void updateActivityCount(String cameraId, int newCameraState, int facing,
+-            String clientName, int apiLevel) {
++    private void updateActivityCount(String cameraId, int newCameraState, int facing, String clientName) {
+         synchronized(mLock) {
+             // Update active camera list and notify NFC if necessary
+             boolean wasEmpty = mActiveCameraUsage.isEmpty();
+@@ -395,7 +391,7 @@ public class CameraServiceProxy extends SystemService
+                 case ICameraServiceProxy.CAMERA_STATE_OPEN:
+                     break;
+                 case ICameraServiceProxy.CAMERA_STATE_ACTIVE:
+-                    CameraUsageEvent newEvent = new CameraUsageEvent(facing, clientName, apiLevel);
++                    CameraUsageEvent newEvent = new CameraUsageEvent(facing, clientName);
+                     CameraUsageEvent oldEvent = mActiveCameraUsage.put(cameraId, newEvent);
+                     if (oldEvent != null) {
+                         Slog.w(TAG, "Camera " + cameraId + " was already marked as active");
+-- 
+2.7.4
+

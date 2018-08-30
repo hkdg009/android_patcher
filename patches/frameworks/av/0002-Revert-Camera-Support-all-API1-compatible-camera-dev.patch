@@ -1,0 +1,41 @@
+From 28d34348b627ef35e51677c1a024c28bd9ccff12 Mon Sep 17 00:00:00 2001
+From: Artem Borisov <dedsa2002@gmail.com>
+Date: Sun, 12 Aug 2018 23:07:27 +0300
+Subject: [PATCH 2/7] Revert "Camera: Support all API1 compatible camera
+ devices"
+
+This reverts commit e1c48edab71972f7e11604917750501db768ea01.
+---
+ .../camera/libcameraservice/common/CameraProviderManager.cpp     | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/services/camera/libcameraservice/common/CameraProviderManager.cpp b/services/camera/libcameraservice/common/CameraProviderManager.cpp
+index 66e9196..b28c1da 100644
+--- a/services/camera/libcameraservice/common/CameraProviderManager.cpp
++++ b/services/camera/libcameraservice/common/CameraProviderManager.cpp
+@@ -39,6 +39,9 @@ namespace {
+ const std::string kLegacyProviderName("legacy/0");
+ const std::string kExternalProviderName("external/0");
+ 
++// Slash-separated list of provider types to consider for use via the old camera API
++const std::string kStandardProviderTypes("internal/legacy/external");
++
+ } // anonymous namespace
+ 
+ CameraProviderManager::HardwareServiceInteractionProxy
+@@ -98,8 +101,10 @@ std::vector<std::string> CameraProviderManager::getAPI1CompatibleCameraDeviceIds
+     std::lock_guard<std::mutex> lock(mInterfaceMutex);
+     std::vector<std::string> deviceIds;
+     for (auto& provider : mProviders) {
+-        for (auto& id : provider->mUniqueAPI1CompatibleCameraIds) {
+-            deviceIds.push_back(id);
++        if (kStandardProviderTypes.find(provider->getType()) != std::string::npos) {
++            for (auto& id : provider->mUniqueAPI1CompatibleCameraIds) {
++                deviceIds.push_back(id);
++            }
+         }
+     }
+ 
+-- 
+2.7.4
+

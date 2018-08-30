@@ -1,0 +1,170 @@
+From 925fabeafdeb9aec81f38f5ded593e768b7edb63 Mon Sep 17 00:00:00 2001
+From: Artem Borisov <dedsa2002@gmail.com>
+Date: Sun, 12 Aug 2018 23:25:56 +0300
+Subject: [PATCH 5/7] Revert "Camera: Add API level to service proxy
+ notification"
+
+This reverts commit 573291c251d9e85f51f7c0fa1cb35baa2969ca17.
+---
+ camera/aidl/android/hardware/ICameraServiceProxy.aidl    |  8 +-------
+ services/camera/libcameraservice/CameraService.cpp       | 16 ++++------------
+ services/camera/libcameraservice/CameraService.h         |  3 +--
+ services/camera/libcameraservice/api1/CameraClient.cpp   | 12 ++++--------
+ .../camera/libcameraservice/common/Camera2ClientBase.cpp |  8 ++------
+ 5 files changed, 12 insertions(+), 35 deletions(-)
+
+diff --git a/camera/aidl/android/hardware/ICameraServiceProxy.aidl b/camera/aidl/android/hardware/ICameraServiceProxy.aidl
+index 7575948..5dc23eb 100644
+--- a/camera/aidl/android/hardware/ICameraServiceProxy.aidl
++++ b/camera/aidl/android/hardware/ICameraServiceProxy.aidl
+@@ -46,14 +46,8 @@ interface ICameraServiceProxy
+     const int CAMERA_FACING_EXTERNAL = 2;
+ 
+     /**
+-     * Values for notifyCameraState api level
+-     */
+-     const int CAMERA_API_LEVEL_1 = 1;
+-     const int CAMERA_API_LEVEL_2 = 2;
+-
+-    /**
+      * Update the status of a camera device.
+      */
+     oneway void notifyCameraState(String cameraId, int facing, int newCameraState,
+-            String clientName, int apiLevel);
++            String clientName);
+ }
+diff --git a/services/camera/libcameraservice/CameraService.cpp b/services/camera/libcameraservice/CameraService.cpp
+index b85b09b..c88e578 100644
+--- a/services/camera/libcameraservice/CameraService.cpp
++++ b/services/camera/libcameraservice/CameraService.cpp
+@@ -2296,13 +2296,9 @@ status_t CameraService::BasicClient::startCameraOps() {
+     // Transition device availability listeners from PRESENT -> NOT_AVAILABLE
+     sCameraService->updateStatus(StatusInternal::NOT_AVAILABLE, mCameraIdStr);
+ 
+-    int apiLevel = hardware::ICameraServiceProxy::CAMERA_API_LEVEL_1;
+-    if (canCastToApiClient(API_2)) {
+-        apiLevel = hardware::ICameraServiceProxy::CAMERA_API_LEVEL_2;
+-    }
+     // Transition device state to OPEN
+     sCameraService->updateProxyDeviceState(ICameraServiceProxy::CAMERA_STATE_OPEN,
+-            mCameraIdStr, mCameraFacing, mClientPackageName, apiLevel);
++            mCameraIdStr, mCameraFacing, mClientPackageName);
+ 
+     return OK;
+ }
+@@ -2327,13 +2323,9 @@ status_t CameraService::BasicClient::finishCameraOps() {
+         sCameraService->updateStatus(StatusInternal::PRESENT,
+                 mCameraIdStr, rejected);
+ 
+-        int apiLevel = hardware::ICameraServiceProxy::CAMERA_API_LEVEL_1;
+-        if (canCastToApiClient(API_2)) {
+-            apiLevel = hardware::ICameraServiceProxy::CAMERA_API_LEVEL_2;
+-        }
+         // Transition device state to CLOSED
+         sCameraService->updateProxyDeviceState(ICameraServiceProxy::CAMERA_STATE_CLOSED,
+-                mCameraIdStr, mCameraFacing, mClientPackageName, apiLevel);
++                mCameraIdStr, mCameraFacing, mClientPackageName);
+     }
+     // Always stop watching, even if no camera op is active
+     if (mOpsCallback != NULL) {
+@@ -3007,11 +2999,11 @@ void CameraService::CameraState::updateStatus(StatusInternal status,
+ }
+ 
+ void CameraService::updateProxyDeviceState(int newState,
+-        const String8& cameraId, int facing, const String16& clientName, int apiLevel) {
++        const String8& cameraId, int facing, const String16& clientName) {
+     sp<ICameraServiceProxy> proxyBinder = getCameraServiceProxy();
+     if (proxyBinder == nullptr) return;
+     String16 id(cameraId);
+-    proxyBinder->notifyCameraState(id, newState, facing, clientName, apiLevel);
++    proxyBinder->notifyCameraState(id, newState, facing, clientName);
+ }
+ 
+ status_t CameraService::getTorchStatusLocked(
+diff --git a/services/camera/libcameraservice/CameraService.h b/services/camera/libcameraservice/CameraService.h
+index 320ce33..6909a95 100644
+--- a/services/camera/libcameraservice/CameraService.h
++++ b/services/camera/libcameraservice/CameraService.h
+@@ -190,8 +190,7 @@ public:
+             int newState,
+             const String8& cameraId,
+             int facing,
+-            const String16& clientName,
+-            int apiLevel);
++            const String16& clientName);
+ 
+     /////////////////////////////////////////////////////////////////////
+     // CameraDeviceFactory functionality
+diff --git a/services/camera/libcameraservice/api1/CameraClient.cpp b/services/camera/libcameraservice/api1/CameraClient.cpp
+index 4563b97..4192cac 100644
+--- a/services/camera/libcameraservice/api1/CameraClient.cpp
++++ b/services/camera/libcameraservice/api1/CameraClient.cpp
+@@ -263,8 +263,7 @@ binder::Status CameraClient::disconnect() {
+     mHardware->stopPreview();
+     sCameraService->updateProxyDeviceState(
+             hardware::ICameraServiceProxy::CAMERA_STATE_IDLE,
+-            mCameraIdStr, mCameraFacing, mClientPackageName,
+-            hardware::ICameraServiceProxy::CAMERA_API_LEVEL_1);
++            mCameraIdStr, mCameraFacing, mClientPackageName);
+     mHardware->cancelPicture();
+     // Release the hardware resources.
+     mHardware->release();
+@@ -426,8 +425,7 @@ status_t CameraClient::startPreviewMode() {
+     if (result == NO_ERROR) {
+         sCameraService->updateProxyDeviceState(
+             hardware::ICameraServiceProxy::CAMERA_STATE_ACTIVE,
+-            mCameraIdStr, mCameraFacing, mClientPackageName,
+-            hardware::ICameraServiceProxy::CAMERA_API_LEVEL_1);
++            mCameraIdStr, mCameraFacing, mClientPackageName);
+     }
+     return result;
+ }
+@@ -470,8 +468,7 @@ void CameraClient::stopPreview() {
+     mHardware->stopPreview();
+     sCameraService->updateProxyDeviceState(
+         hardware::ICameraServiceProxy::CAMERA_STATE_IDLE,
+-        mCameraIdStr, mCameraFacing, mClientPackageName,
+-        hardware::ICameraServiceProxy::CAMERA_API_LEVEL_1);
++        mCameraIdStr, mCameraFacing, mClientPackageName);
+     mPreviewBuffer.clear();
+ }
+ 
+@@ -977,8 +974,7 @@ void CameraClient::handleShutter(void) {
+     // idle now, until preview is restarted
+     sCameraService->updateProxyDeviceState(
+         hardware::ICameraServiceProxy::CAMERA_STATE_IDLE,
+-        mCameraIdStr, mCameraFacing, mClientPackageName,
+-        hardware::ICameraServiceProxy::CAMERA_API_LEVEL_1);
++        mCameraIdStr, mCameraFacing, mClientPackageName);
+ 
+     mLock.unlock();
+ }
+diff --git a/services/camera/libcameraservice/common/Camera2ClientBase.cpp b/services/camera/libcameraservice/common/Camera2ClientBase.cpp
+index 3a3d5f6..5c6711a 100644
+--- a/services/camera/libcameraservice/common/Camera2ClientBase.cpp
++++ b/services/camera/libcameraservice/common/Camera2ClientBase.cpp
+@@ -252,9 +252,7 @@ void Camera2ClientBase<TClientBase>::notifyIdle() {
+     if (mDeviceActive) {
+         getCameraService()->updateProxyDeviceState(
+             hardware::ICameraServiceProxy::CAMERA_STATE_IDLE, TClientBase::mCameraIdStr,
+-            TClientBase::mCameraFacing, TClientBase::mClientPackageName,
+-            ((mApi1CameraId < 0) ? hardware::ICameraServiceProxy::CAMERA_API_LEVEL_2 :
+-             hardware::ICameraServiceProxy::CAMERA_API_LEVEL_1));
++            TClientBase::mCameraFacing, TClientBase::mClientPackageName);
+     }
+     mDeviceActive = false;
+ 
+@@ -270,9 +268,7 @@ void Camera2ClientBase<TClientBase>::notifyShutter(const CaptureResultExtras& re
+     if (!mDeviceActive) {
+         getCameraService()->updateProxyDeviceState(
+             hardware::ICameraServiceProxy::CAMERA_STATE_ACTIVE, TClientBase::mCameraIdStr,
+-            TClientBase::mCameraFacing, TClientBase::mClientPackageName,
+-            ((mApi1CameraId < 0) ? hardware::ICameraServiceProxy::CAMERA_API_LEVEL_2 :
+-             hardware::ICameraServiceProxy::CAMERA_API_LEVEL_1));
++            TClientBase::mCameraFacing, TClientBase::mClientPackageName);
+     }
+     mDeviceActive = true;
+ 
+-- 
+2.7.4
+

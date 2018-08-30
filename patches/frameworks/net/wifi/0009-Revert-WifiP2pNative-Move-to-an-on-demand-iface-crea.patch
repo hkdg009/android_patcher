@@ -1,0 +1,516 @@
+From f9633d48415369a5146468a360d1f671bda23570 Mon Sep 17 00:00:00 2001
+From: Artem Borisov <dedsa2002@gmail.com>
+Date: Tue, 14 Aug 2018 14:22:15 +0300
+Subject: [PATCH 9/9] Revert "WifiP2pNative: Move to an on-demand iface
+ creation model"
+
+This reverts commit 0c40ab456acd32da416325f5da00ffea9d0314ca.
+---
+ .../java/com/android/server/wifi/WifiInjector.java |   2 +-
+ .../android/server/wifi/p2p/WifiP2pMonitor.java    |  39 +++++-
+ .../com/android/server/wifi/p2p/WifiP2pNative.java |  84 ++----------
+ .../server/wifi/p2p/WifiP2pServiceImpl.java        | 143 +++++++++++++--------
+ 4 files changed, 142 insertions(+), 126 deletions(-)
+
+diff --git a/service/java/com/android/server/wifi/WifiInjector.java b/service/java/com/android/server/wifi/WifiInjector.java
+index cb33e16..d164b84 100644
+--- a/service/java/com/android/server/wifi/WifiInjector.java
++++ b/service/java/com/android/server/wifi/WifiInjector.java
+@@ -196,7 +196,7 @@ public class WifiInjector {
+         mWifiP2pMonitor = new WifiP2pMonitor(this);
+         mSupplicantP2pIfaceHal = new SupplicantP2pIfaceHal(mWifiP2pMonitor);
+         mWifiP2pNative = new WifiP2pNative(SystemProperties.get("wifi.direct.interface", "p2p0"),
+-                mSupplicantP2pIfaceHal, mHalDeviceManager);
++                mSupplicantP2pIfaceHal);
+ 
+         // Now get instances of all the objects that depend on the HandlerThreads
+         mTrafficPoller = new WifiTrafficPoller(mContext, mWifiServiceHandlerThread.getLooper(),
+diff --git a/service/java/com/android/server/wifi/p2p/WifiP2pMonitor.java b/service/java/com/android/server/wifi/p2p/WifiP2pMonitor.java
+index c42d9a8..e14c10c 100644
+--- a/service/java/com/android/server/wifi/p2p/WifiP2pMonitor.java
++++ b/service/java/com/android/server/wifi/p2p/WifiP2pMonitor.java
+@@ -143,14 +143,49 @@ public class WifiP2pMonitor {
+     }
+ 
+     /**
++     * Wait for wpa_supplicant's control interface to be ready.
++     *
++     * TODO: Add unit tests for these once we remove the legacy code.
++     */
++    private boolean ensureConnectedLocked() {
++        if (mConnected) {
++            return true;
++        }
++        if (mVerboseLoggingEnabled) Log.d(TAG, "connecting to supplicant");
++        int connectTries = 0;
++        while (true) {
++            mConnected = mWifiInjector.getWifiP2pNative().connectToSupplicant();
++            if (mConnected) {
++                return true;
++            }
++            if (connectTries++ < 50) {
++                try {
++                    Thread.sleep(100);
++                } catch (InterruptedException ignore) {
++                }
++            } else {
++                return false;
++            }
++        }
++    }
++
++    /**
+      * Start Monitoring for wpa_supplicant events.
+      *
+      * @param iface Name of iface.
+      * TODO: Add unit tests for these once we remove the legacy code.
+      */
+     public synchronized void startMonitoring(String iface) {
+-        setMonitoring(iface, true);
+-        broadcastSupplicantConnectionEvent(iface);
++        if (ensureConnectedLocked()) {
++            setMonitoring(iface, true);
++            broadcastSupplicantConnectionEvent(iface);
++        } else {
++            boolean originalMonitoring = isMonitoring(iface);
++            setMonitoring(iface, true);
++            broadcastSupplicantDisconnectionEvent(iface);
++            setMonitoring(iface, originalMonitoring);
++            Log.e(TAG, "startMonitoring(" + iface + ") failed!");
++        }
+     }
+ 
+     /**
+diff --git a/service/java/com/android/server/wifi/p2p/WifiP2pNative.java b/service/java/com/android/server/wifi/p2p/WifiP2pNative.java
+index 5e5c384..bae3faa 100644
+--- a/service/java/com/android/server/wifi/p2p/WifiP2pNative.java
++++ b/service/java/com/android/server/wifi/p2p/WifiP2pNative.java
+@@ -16,16 +16,10 @@
+ 
+ package com.android.server.wifi.p2p;
+ 
+-import android.annotation.NonNull;
+-import android.hardware.wifi.V1_0.IWifiP2pIface;
+ import android.net.wifi.p2p.WifiP2pConfig;
+ import android.net.wifi.p2p.WifiP2pGroup;
+ import android.net.wifi.p2p.WifiP2pGroupList;
+ import android.net.wifi.p2p.nsd.WifiP2pServiceInfo;
+-import android.os.Handler;
+-import android.util.Log;
+-
+-import com.android.server.wifi.HalDeviceManager;
+ 
+ /**
+  * Native calls for bring up/shut down of the supplicant daemon and for
+@@ -37,15 +31,15 @@ public class WifiP2pNative {
+     private final String mTAG;
+     private final String mInterfaceName;
+     private final SupplicantP2pIfaceHal mSupplicantP2pIfaceHal;
+-    private final HalDeviceManager mHalDeviceManager;
+-    private IWifiP2pIface mIWifiP2pIface;
+ 
+-    public WifiP2pNative(String interfaceName, SupplicantP2pIfaceHal p2pIfaceHal,
+-                         HalDeviceManager halDeviceManager) {
++    public WifiP2pNative(String interfaceName, SupplicantP2pIfaceHal p2pIfaceHal) {
+         mTAG = "WifiP2pNative-" + interfaceName;
+         mInterfaceName = interfaceName;
+         mSupplicantP2pIfaceHal = p2pIfaceHal;
+-        mHalDeviceManager = halDeviceManager;
++    }
++
++    public String getInterfaceName() {
++        return mInterfaceName;
+     }
+ 
+     /**
+@@ -54,31 +48,23 @@ public class WifiP2pNative {
+     public void enableVerboseLogging(int verbose) {
+     }
+ 
+-    private static final int CONNECT_TO_SUPPLICANT_SAMPLING_INTERVAL_MS = 100;
+-    private static final int CONNECT_TO_SUPPLICANT_MAX_SAMPLES = 50;
++    /********************************************************
++     * Supplicant operations
++     ********************************************************/
+     /**
+-     * This method is called to wait for establishing connection to wpa_supplicant.
++     * This method is called repeatedly until the connection to wpa_supplicant is established.
+      *
+      * @return true if connection is established, false otherwise.
++     * TODO: Add unit tests for these once we remove the legacy code.
+      */
+-    private boolean waitForSupplicantConnection() {
++    public boolean connectToSupplicant() {
+         // Start initialization if not already started.
+         if (!mSupplicantP2pIfaceHal.isInitializationStarted()
+                 && !mSupplicantP2pIfaceHal.initialize()) {
+             return false;
+         }
+-        int connectTries = 0;
+-        while (connectTries++ < CONNECT_TO_SUPPLICANT_MAX_SAMPLES) {
+-            // Check if the initialization is complete.
+-            if (mSupplicantP2pIfaceHal.isInitializationComplete()) {
+-                return true;
+-            }
+-            try {
+-                Thread.sleep(CONNECT_TO_SUPPLICANT_SAMPLING_INTERVAL_MS);
+-            } catch (InterruptedException ignore) {
+-            }
+-        }
+-        return false;
++        // Check if the initialization is complete.
++        return mSupplicantP2pIfaceHal.isInitializationComplete();
+     }
+ 
+     /**
+@@ -89,50 +75,6 @@ public class WifiP2pNative {
+     }
+ 
+     /**
+-     * Setup Interface for P2p mode.
+-     *
+-     * @param destroyedListener Listener to be invoked when the interface is destroyed.
+-     * @param handler Handler to be used for invoking the destroyedListener.
+-     */
+-    public String setupInterface(
+-            @NonNull HalDeviceManager.InterfaceDestroyedListener destroyedListener,
+-            Handler handler) {
+-        if (mIWifiP2pIface == null) {
+-            mIWifiP2pIface = mHalDeviceManager.createP2pIface((@NonNull String ifaceName) -> {
+-                Log.i(mTAG, "IWifiP2pIface destroyedListener");
+-                mSupplicantP2pIfaceHal.teardownIface(ifaceName);
+-                mIWifiP2pIface = null;
+-                destroyedListener.onDestroyed(ifaceName);
+-            }, handler);
+-            if (mIWifiP2pIface == null) {
+-                Log.e(mTAG, "Failed to create P2p iface in HalDeviceManager");
+-                return null;
+-            }
+-            if (!waitForSupplicantConnection()) {
+-                Log.e(mTAG, "Failed to connect to supplicant");
+-                teardownInterface();
+-                return null;
+-            }
+-            if (!mSupplicantP2pIfaceHal.setupIface(HalDeviceManager.getName(mIWifiP2pIface))) {
+-                Log.e(mTAG, "Failed to setup P2p iface in supplicant");
+-                teardownInterface();
+-                return null;
+-            }
+-        }
+-        return HalDeviceManager.getName(mIWifiP2pIface);
+-    }
+-
+-    /**
+-     * Teardown P2p interface.
+-     */
+-    public void teardownInterface() {
+-        if (mIWifiP2pIface != null) {
+-            mHalDeviceManager.removeIface(mIWifiP2pIface);
+-            mIWifiP2pIface = null;
+-        }
+-    }
+-
+-    /**
+      * Set WPS device name.
+      *
+      * @param name String to be set.
+diff --git a/service/java/com/android/server/wifi/p2p/WifiP2pServiceImpl.java b/service/java/com/android/server/wifi/p2p/WifiP2pServiceImpl.java
+index d8a748d..fc30887 100644
+--- a/service/java/com/android/server/wifi/p2p/WifiP2pServiceImpl.java
++++ b/service/java/com/android/server/wifi/p2p/WifiP2pServiceImpl.java
+@@ -16,6 +16,7 @@
+ 
+ package com.android.server.wifi.p2p;
+ 
++import android.annotation.NonNull;
+ import android.app.AlertDialog;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+@@ -25,6 +26,7 @@ import android.content.Intent;
+ import android.content.pm.PackageManager;
+ import android.content.res.Configuration;
+ import android.content.res.Resources;
++import android.hardware.wifi.V1_0.IWifiP2pIface;
+ import android.net.ConnectivityManager;
+ import android.net.DhcpResults;
+ import android.net.InterfaceConfiguration;
+@@ -77,6 +79,7 @@ import com.android.internal.util.AsyncChannel;
+ import com.android.internal.util.Protocol;
+ import com.android.internal.util.State;
+ import com.android.internal.util.StateMachine;
++import com.android.server.wifi.HalDeviceManager;
+ import com.android.server.wifi.WifiInjector;
+ import com.android.server.wifi.WifiStateMachine;
+ import com.android.server.wifi.util.WifiAsyncChannel;
+@@ -177,8 +180,6 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+     //   msg.arg2 = msg to send when blocked
+     //   msg.obj  = StateMachine to send to when blocked
+     public static final int BLOCK_DISCOVERY                 =   BASE + 15;
+-    public static final int ENABLE_P2P                      =   BASE + 16;
+-    public static final int DISABLE_P2P                     =   BASE + 17;
+ 
+     // Messages for interaction with IpClient.
+     private static final int IPC_PRE_DHCP_ACTION            =   BASE + 30;
+@@ -380,6 +381,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+     }
+     private Object mLock = new Object();
+     private final Map<IBinder, DeathHandlerData> mDeathDataByBinder = new HashMap<>();
++    private HalDeviceManager mHalDeviceManager;
++    private IWifiP2pIface mIWifiP2pIface;
+ 
+     public WifiP2pServiceImpl(Context context) {
+         mContext = context;
+@@ -514,7 +517,21 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+                 Log.e(TAG, "Error on linkToDeath: e=" + e);
+                 // fall-through here - won't clean up
+             }
+-            mP2pStateMachine.sendMessage(ENABLE_P2P);
++
++            if (mIWifiP2pIface == null) {
++                if (mHalDeviceManager == null) {
++                    if (mWifiInjector == null) {
++                        mWifiInjector = WifiInjector.getInstance();
++                    }
++                    mHalDeviceManager = mWifiInjector.getHalDeviceManager();
++                }
++                mIWifiP2pIface = mHalDeviceManager.createP2pIface((@NonNull String ifaceName) -> {
++                    if (DBG) Log.d(TAG, "IWifiP2pIface destroyedListener");
++                    synchronized (mLock) {
++                        mIWifiP2pIface = null;
++                    }
++                }, mP2pStateMachine.getHandler());
++            }
+ 
+             return messenger;
+         }
+@@ -563,7 +580,11 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+                 } catch (RemoteException e) {
+                     Log.e(TAG, "close: Failed sending clean-up commands: e=" + e);
+                 }
+-                mP2pStateMachine.sendMessage(DISABLE_P2P);
++
++                if (mIWifiP2pIface != null) {
++                    mHalDeviceManager.removeIface(mIWifiP2pIface);
++                    mIWifiP2pIface = null;
++                }
+             }
+         }
+     }
+@@ -639,6 +660,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+         private P2pNotSupportedState mP2pNotSupportedState = new P2pNotSupportedState();
+         private P2pDisablingState mP2pDisablingState = new P2pDisablingState();
+         private P2pDisabledState mP2pDisabledState = new P2pDisabledState();
++        private P2pEnablingState mP2pEnablingState = new P2pEnablingState();
+         private P2pEnabledState mP2pEnabledState = new P2pEnabledState();
+         // Inactive is when p2p is enabled with no connectivity
+         private InactiveState mInactiveState = new InactiveState();
+@@ -660,8 +682,6 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+         private final WifiP2pDeviceList mPeers = new WifiP2pDeviceList();
+         // WifiInjector is lazy initialized in P2p Service
+         private WifiInjector mWifiInjector;
+-        private String mInterfaceName;
+-
+         // During a connection, supplicant can tell us that a device was lost. From a supplicant's
+         // perspective, the discovery stops during connection and it purges device since it does
+         // not get latest updates about the device without being in discovery state.
+@@ -695,6 +715,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+                 addState(mP2pNotSupportedState, mDefaultState);
+                 addState(mP2pDisablingState, mDefaultState);
+                 addState(mP2pDisabledState, mDefaultState);
++                addState(mP2pEnablingState, mDefaultState);
+                 addState(mP2pEnabledState, mDefaultState);
+                     addState(mInactiveState, mP2pEnabledState);
+                     addState(mGroupCreatingState, mP2pEnabledState);
+@@ -715,55 +736,51 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+             }
+             setLogRecSize(50);
+             setLogOnlyTransitions(true);
+-        }
+-
+-        public void registerForWifiMonitorEvents() {
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            String interfaceName = mWifiNative.getInterfaceName();
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.AP_STA_CONNECTED_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.AP_STA_DISCONNECTED_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_DEVICE_FOUND_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_DEVICE_LOST_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_FIND_STOPPED_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_GO_NEGOTIATION_FAILURE_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_GO_NEGOTIATION_REQUEST_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_GO_NEGOTIATION_SUCCESS_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_GROUP_FORMATION_FAILURE_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_GROUP_FORMATION_SUCCESS_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_GROUP_REMOVED_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_GROUP_STARTED_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_INVITATION_RECEIVED_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_INVITATION_RESULT_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_PROV_DISC_ENTER_PIN_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_PROV_DISC_FAILURE_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_PROV_DISC_PBC_REQ_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_PROV_DISC_PBC_RSP_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_PROV_DISC_SHOW_PIN_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.P2P_SERV_DISC_RESP_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.SUP_CONNECTION_EVENT, getHandler());
+-            mWifiMonitor.registerHandler(mInterfaceName,
++            mWifiMonitor.registerHandler(interfaceName,
+                     WifiP2pMonitor.SUP_DISCONNECTION_EVENT, getHandler());
+-
+-            mWifiMonitor.startMonitoring(mInterfaceName);
+         }
+ 
+         class DefaultState extends State {
+@@ -939,10 +956,10 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+                     case WifiP2pManager.START_LISTEN:
+                     case WifiP2pManager.STOP_LISTEN:
+                     case WifiP2pManager.SET_CHANNEL:
+-                    case ENABLE_P2P:
++                    case WifiStateMachine.CMD_ENABLE_P2P:
+                         // Enable is lazy and has no response
+                         break;
+-                    case DISABLE_P2P:
++                    case WifiStateMachine.CMD_DISABLE_P2P_REQ:
+                         // If we end up handling in default, p2p is not enabled
+                         if (mWifiChannel !=  null) {
+                             mWifiChannel.sendMessage(WifiStateMachine.CMD_DISABLE_P2P_RSP);
+@@ -1084,8 +1101,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+                         if (DBG) logd("p2p socket connection lost");
+                         transitionTo(mP2pDisabledState);
+                         break;
+-                    case ENABLE_P2P:
+-                    case DISABLE_P2P:
++                    case WifiStateMachine.CMD_ENABLE_P2P:
++                    case WifiStateMachine.CMD_DISABLE_P2P_REQ:
+                         deferMessage(message);
+                         break;
+                     case DISABLE_P2P_TIMED_OUT:
+@@ -1120,24 +1137,46 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+             public boolean processMessage(Message message) {
+                 if (DBG) logd(getName() + message.toString());
+                 switch (message.what) {
+-                    case ENABLE_P2P:
+-                        mInterfaceName = mWifiNative.setupInterface((String ifaceName) -> {
+-                            sendMessage(DISABLE_P2P);
+-                        }, getHandler());
+-                        if (mInterfaceName == null) {
+-                            Log.e(TAG, "Failed to setup interface for P2P");
+-                            break;
+-                        }
++                    case WifiStateMachine.CMD_ENABLE_P2P:
+                         try {
+-                            mNwService.setInterfaceUp(mInterfaceName);
++                            mNwService.setInterfaceUp(mWifiNative.getInterfaceName());
+                         } catch (RemoteException re) {
+                             loge("Unable to change interface settings: " + re);
+                         } catch (IllegalStateException ie) {
+                             loge("Unable to change interface settings: " + ie);
+                         }
+-                        registerForWifiMonitorEvents();
++                        mWifiMonitor.startMonitoring(mWifiNative.getInterfaceName());
++                        transitionTo(mP2pEnablingState);
++                        break;
++                    default:
++                        return NOT_HANDLED;
++                }
++                return HANDLED;
++            }
++        }
++
++        class P2pEnablingState extends State {
++            @Override
++            public void enter() {
++                if (DBG) logd(getName());
++            }
++
++            @Override
++            public boolean processMessage(Message message) {
++                if (DBG) logd(getName() + message.toString());
++                switch (message.what) {
++                    case WifiP2pMonitor.SUP_CONNECTION_EVENT:
++                        if (DBG) logd("P2p socket connection successful");
+                         transitionTo(mInactiveState);
+                         break;
++                    case WifiP2pMonitor.SUP_DISCONNECTION_EVENT:
++                        loge("P2p socket connection failed");
++                        transitionTo(mP2pDisabledState);
++                        break;
++                    case WifiStateMachine.CMD_ENABLE_P2P:
++                    case WifiStateMachine.CMD_DISABLE_P2P_REQ:
++                        deferMessage(message);
++                        break;
+                     default:
+                         return NOT_HANDLED;
+                 }
+@@ -1163,16 +1202,16 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+                         loge("Unexpected loss of p2p socket connection");
+                         transitionTo(mP2pDisabledState);
+                         break;
+-                    case ENABLE_P2P:
++                    case WifiStateMachine.CMD_ENABLE_P2P:
+                         // Nothing to do
+                         break;
+-                    case DISABLE_P2P:
++                    case WifiStateMachine.CMD_DISABLE_P2P_REQ:
+                         if (mPeers.clear()) {
+                             sendPeersChangedBroadcast();
+                         }
+                         if (mGroups.clear()) sendP2pPersistentGroupsChangedBroadcast();
+-                        mWifiMonitor.stopMonitoring(mInterfaceName);
+-                        mWifiNative.teardownInterface();
++
++                        mWifiMonitor.stopMonitoring(mWifiNative.getInterfaceName());
+                         transitionTo(mP2pDisablingState);
+                         break;
+                     case WifiP2pManager.SET_DEVICE_NAME:
+@@ -2267,7 +2306,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
+                         if (DBG) logd("Add device to lost list " + device);
+                         mPeersLostDuringConnection.updateSupplicantDetails(device);
+                         return HANDLED;
+-                    case DISABLE_P2P:
++                    case WifiStateMachine.CMD_DISABLE_P2P_REQ:
+                         sendMessage(WifiP2pManager.REMOVE_GROUP);
+                         deferMessage(message);
+                         break;
+-- 
+2.7.4
+

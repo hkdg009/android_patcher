@@ -2,9 +2,14 @@
 
 ROOT="${PWD}"
 REPOSITORIES=(
+    'frameworks/av'
+    'frameworks/base'
     'frameworks/native'
+    'frameworks/net/wifi'
+    'frameworks/opt/telephony'
     'packages/apps/Camera2'
-)
+    'system/sepolicy'
+ )
 
 for repository in "${REPOSITORIES[@]}"; do
     cd "${ROOT}/${repository}"

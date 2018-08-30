@@ -1,0 +1,86 @@
+From db29cbce2ec4a955dd5cebbda21cf55f694b9fb3 Mon Sep 17 00:00:00 2001
+From: Artem Borisov <dedsa2002@gmail.com>
+Date: Mon, 13 Aug 2018 23:21:32 +0300
+Subject: [PATCH 7/7] Revert "CameraService: fix camera removal paths"
+
+This reverts commit 6034bf5f21c57f66f3307d7934bc5c7616d2acf3.
+
+Change-Id: I8cf206d5b6070ee6894521dbc8e7c4edfb967271
+---
+ camera/ndk/impl/ACameraManager.cpp                            |  3 ---
+ services/camera/libcameraservice/CameraService.cpp            |  1 -
+ .../camera/libcameraservice/common/CameraProviderManager.cpp  | 11 -----------
+ .../camera/libcameraservice/common/CameraProviderManager.h    |  2 --
+ 4 files changed, 17 deletions(-)
+
+diff --git a/camera/ndk/impl/ACameraManager.cpp b/camera/ndk/impl/ACameraManager.cpp
+index c59d0e7..e409ddd 100644
+--- a/camera/ndk/impl/ACameraManager.cpp
++++ b/camera/ndk/impl/ACameraManager.cpp
+@@ -340,9 +340,6 @@ void CameraManagerGlobal::onStatusChangedLocked(
+         msg->setString(kCameraIdKey, AString(cameraId));
+         msg->post();
+     }
+-    if (status == hardware::ICameraServiceListener::STATUS_NOT_PRESENT) {
+-        mDeviceStatusMap.erase(cameraId);
+-    }
+ }
+ 
+ } // namespace android
+diff --git a/services/camera/libcameraservice/CameraService.cpp b/services/camera/libcameraservice/CameraService.cpp
+index f9dcf93..b05ae33 100644
+--- a/services/camera/libcameraservice/CameraService.cpp
++++ b/services/camera/libcameraservice/CameraService.cpp
+@@ -371,7 +371,6 @@ void CameraService::onDeviceStatusChanged(const String8& id,
+             clientToDisconnect->disconnect();
+         }
+ 
+-        removeStates(id);
+     } else {
+         if (oldStatus == StatusInternal::NOT_PRESENT) {
+             logDeviceAdded(id, String8::format("Device status changed from %d to %d", oldStatus,
+diff --git a/services/camera/libcameraservice/common/CameraProviderManager.cpp b/services/camera/libcameraservice/common/CameraProviderManager.cpp
+index 73735aa..2fdb3b9 100644
+--- a/services/camera/libcameraservice/common/CameraProviderManager.cpp
++++ b/services/camera/libcameraservice/common/CameraProviderManager.cpp
+@@ -603,15 +603,6 @@ status_t CameraProviderManager::ProviderInfo::addDevice(const std::string& name,
+     return OK;
+ }
+ 
+-void CameraProviderManager::ProviderInfo::removeDevice(std::string id) {
+-    for (auto it = mDevices.begin(); it != mDevices.end(); it++) {
+-        if ((*it)->mId == id) {
+-            mDevices.erase(it);
+-            break;
+-        }
+-    }
+-}
+-
+ status_t CameraProviderManager::ProviderInfo::dump(int fd, const Vector<String16>&) const {
+     dprintf(fd, "== Camera Provider HAL %s (v2.4, %s) static info: %zu devices: ==\n",
+             mProviderName.c_str(), mInterface->isRemote() ? "remote" : "passthrough",
+@@ -693,8 +684,6 @@ hardware::Return<void> CameraProviderManager::ProviderInfo::cameraDeviceStatusCh
+                 return hardware::Void();
+             }
+             addDevice(cameraDeviceName, newStatus, &id);
+-        } else if (newStatus == CameraDeviceStatus::NOT_PRESENT) {
+-            removeDevice(id);
+         }
+         listener = mManager->getStatusListener();
+     }
+diff --git a/services/camera/libcameraservice/common/CameraProviderManager.h b/services/camera/libcameraservice/common/CameraProviderManager.h
+index d02abb0..0f1f07b 100644
+--- a/services/camera/libcameraservice/common/CameraProviderManager.h
++++ b/services/camera/libcameraservice/common/CameraProviderManager.h
+@@ -387,8 +387,6 @@ private:
+ 
+         // Generate vendor tag id
+         static metadata_vendor_id_t generateVendorTagId(const std::string &name);
+-
+-        void removeDevice(std::string id);
+     };
+ 
+     // Utility to find a DeviceInfo by ID; pointer is only valid while mInterfaceMutex is held
+-- 
+2.7.4
+

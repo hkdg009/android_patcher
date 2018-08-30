@@ -1,4 +1,4 @@
-From d485fa7be00738150e6ba5cf270939b36256a070 Mon Sep 17 00:00:00 2001
+From da86d41f30bb3114f05a8eb508f0a4f57ba00b85 Mon Sep 17 00:00:00 2001
 From: Meticulus <theonejohnnyd@gmail.com>
 Date: Mon, 9 Jan 2017 10:42:52 -0600
 Subject: [PATCH] Camera2: Fix photo snap delay on front cam.
@@ -22,7 +22,7 @@ Change-Id: Ic0f9ffc7332163b7b087d0684c6ba82febda5406
  2 files changed, 6 insertions(+), 5 deletions(-)
 
 diff --git a/src/com/android/camera/one/v2/SimpleOneCameraFactory.java b/src/com/android/camera/one/v2/SimpleOneCameraFactory.java
-index 59d94cf54..da654c7be 100644
+index 59d94cf..da654c7 100644
 --- a/src/com/android/camera/one/v2/SimpleOneCameraFactory.java
 +++ b/src/com/android/camera/one/v2/SimpleOneCameraFactory.java
 @@ -214,7 +214,7 @@ public class SimpleOneCameraFactory implements OneCameraFactory {
@@ -35,7 +35,7 @@ index 59d94cf54..da654c7be 100644
                  }
  
 diff --git a/src/com/android/camera/one/v2/photo/PictureTakerFactory.java b/src/com/android/camera/one/v2/photo/PictureTakerFactory.java
-index cf585f382..441ea02a6 100644
+index 68ca5a7..5fca0fc 100644
 --- a/src/com/android/camera/one/v2/photo/PictureTakerFactory.java
 +++ b/src/com/android/camera/one/v2/photo/PictureTakerFactory.java
 @@ -43,20 +43,21 @@ public final class PictureTakerFactory {
@@ -49,7 +49,7 @@ index cf585f382..441ea02a6 100644
          // performs the AF & AE precapture sequence.
          ImageCaptureCommand flashOnCommand = new ConvergedImageCaptureCommand(
                  sharedImageReader, frameServer, rootRequestBuilder,
-                 CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG, CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG,
+                 CameraDevice.TEMPLATE_STILL_CAPTURE, CameraDevice.TEMPLATE_STILL_CAPTURE,
 -                Arrays.asList(rootRequestBuilder), true /* ae */, true /* af */);
 +                Arrays.asList(rootRequestBuilder), true /* ae */, direction == OneCamera.Facing.BACK ? true : false /* af */);
  
@@ -57,7 +57,7 @@ index cf585f382..441ea02a6 100644
          // (which can be very slow).
          ImageCaptureCommand flashOffCommand = new ConvergedImageCaptureCommand(
                  sharedImageReader, frameServer, rootRequestBuilder,
-                 CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG, CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG,
+                 CameraDevice.TEMPLATE_STILL_CAPTURE, CameraDevice.TEMPLATE_STILL_CAPTURE,
 -                Arrays.asList(rootRequestBuilder), false /* ae */, true /* af */);
 +                Arrays.asList(rootRequestBuilder), false /* ae */, direction == OneCamera.Facing.BACK ? true : false /* af */);
  
@@ -66,12 +66,12 @@ index cf585f382..441ea02a6 100644
 @@ -64,7 +65,7 @@ public final class PictureTakerFactory {
          ImageCaptureCommand flashAutoCommand = new ConvergedImageCaptureCommand(
                  sharedImageReader, frameServer, rootRequestBuilder,
-                 CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG, CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG,
+                 CameraDevice.TEMPLATE_STILL_CAPTURE, CameraDevice.TEMPLATE_STILL_CAPTURE,
 -                Arrays.asList(rootRequestBuilder), true /* ae */, true /* af */);
 +                Arrays.asList(rootRequestBuilder), true /* ae */, direction == OneCamera.Facing.BACK ? true : false /* af */);
  
          ImageCaptureCommand flashBasedCommand = new FlashBasedPhotoCommand(logFactory, flashMode,
                  flashOnCommand, flashAutoCommand, flashOffCommand);
 -- 
-2.14.3
+2.7.4
 

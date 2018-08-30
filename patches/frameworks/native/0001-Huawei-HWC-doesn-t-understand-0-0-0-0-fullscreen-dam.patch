@@ -1,4 +1,4 @@
-From b9f79a92a94b7d070af42ef31f36b344d58eaea2 Mon Sep 17 00:00:00 2001
+From c11845881d0bcc95a372a90b70252692ed1cf457 Mon Sep 17 00:00:00 2001
 From: Pierre-Hugues Husson <phh@phh.me>
 Date: Fri, 5 Jan 2018 00:26:38 +0100
 Subject: [PATCH] Huawei:: HWC doesn't understand 0,0,0,0 == fullscreen damage.
@@ -14,65 +14,39 @@ This fixes several UI glitches, most notably GBoard.
 
 Change-Id: I5342418406a5f8b0070145f621f342824e05d321
 ---
- services/surfaceflinger/Layer.cpp          | 35 +++++++++++++++++++++++++++++-
- services/surfaceflinger/SurfaceFlinger.cpp |  7 ++++++
- services/surfaceflinger/SurfaceFlinger.h   |  2 ++
- 3 files changed, 43 insertions(+), 1 deletion(-)
+ services/surfaceflinger/BufferLayer.cpp    | 8 +++++++-
+ services/surfaceflinger/SurfaceFlinger.cpp | 8 ++++++++
+ services/surfaceflinger/SurfaceFlinger.h   | 2 ++
+ 3 files changed, 17 insertions(+), 1 deletion(-)
 
-diff --git a/services/surfaceflinger/Layer.cpp b/services/surfaceflinger/Layer.cpp
-index 038ece2e0..656221b70 100755
---- a/services/surfaceflinger/Layer.cpp
-+++ b/services/surfaceflinger/Layer.cpp
-@@ -871,7 +871,40 @@ void Layer::setPerFrameData(const sp<const DisplayDevice>& displayDevice) {
+diff --git a/services/surfaceflinger/BufferLayer.cpp b/services/surfaceflinger/BufferLayer.cpp
+index fda7906..972e98b 100644
+--- a/services/surfaceflinger/BufferLayer.cpp
++++ b/services/surfaceflinger/BufferLayer.cpp
+@@ -631,7 +631,13 @@ void BufferLayer::setPerFrameData(const sp<const DisplayDevice>& displayDevice)
          visible.dump(LOG_TAG);
      }
  
 -    error = hwcLayer->setSurfaceDamage(surfaceDamageRegion);
 +    if (mFlinger->mDamageUsesScreenReference) {
-+        const Rect& frame = hwcInfo.displayFrame;
-+        int32_t left = frame.left;
-+        int32_t top = frame.top;
-+        int32_t right = frame.right;
-+        int32_t bottom = frame.bottom;
-+        if (surfaceDamageRegion.getBounds() == Rect::INVALID_RECT) {
-+            auto fullSource = Region(Rect(left, top, right, bottom));
-+            error = hwcLayer->setSurfaceDamage(fullSource);
-+        } else {
-+            // There is no easy way to scale, so just scale the bounds
-+            const Rect& preDamageRect = surfaceDamageRegion.bounds();
-+            const FloatRect& crop = hwcInfo.sourceCrop;
-+
-+            float frameWidth = right - left;
-+            float frameHeight = bottom - top;
-+
-+            float cropWidth = crop.right - crop.left;
-+            float cropHeight = crop.bottom - crop.top;
-+
-+            float wFactor = frameWidth / cropWidth;
-+            float hFactor = frameHeight / cropHeight;
-+
-+            Rect scaledDamageRect = Rect(
-+                    (int)(preDamageRect.left * wFactor),
-+                    (int)(preDamageRect.top * hFactor),
-+                    (int)(preDamageRect.right * wFactor),
-+                    (int)(preDamageRect.bottom * hFactor));
-+            Region realDamage = Region(scaledDamageRect).translate(frame.left, frame.top);
-+            error = hwcLayer->setSurfaceDamage(realDamage);
-+        }
++        const auto& frame = hwcInfo.displayFrame;
++        auto fullSource = Region(Rect(frame.left, frame.top, frame.right, frame.bottom));
++        error = hwcLayer->setSurfaceDamage(fullSource);
 +    } else {
 +        error = hwcLayer->setSurfaceDamage(surfaceDamageRegion);
 +    }
      if (error != HWC2::Error::None) {
          ALOGE("[%s] Failed to set surface damage: %s (%d)", mName.string(),
-                 to_string(error).c_str(), static_cast<int32_t>(error));
+               to_string(error).c_str(), static_cast<int32_t>(error));
 diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
-index d75774686..ec83962f8 100644
+index 87baf8c..8cf044e 100644
 --- a/services/surfaceflinger/SurfaceFlinger.cpp
 +++ b/services/surfaceflinger/SurfaceFlinger.cpp
-@@ -248,6 +248,13 @@ SurfaceFlinger::SurfaceFlinger()
-     // but since /data may be encrypted, we need to wait until after vold
-     // comes online to attempt to read the property. The property is
-     // instead read after the boot animation
+@@ -350,6 +350,14 @@ SurfaceFlinger::SurfaceFlinger() : SurfaceFlinger(SkipInitialization) {
+         // for production purposes later on.
+         setenv("TREBLE_TESTING_OVERRIDE", "true", true);
+     }
++
 +    property_get("ro.hardware", value, "");
 +    if (!strcmp(value, "hi3660") ||
 +            !strcmp(value, "hi6250") ||
@@ -84,18 +58,18 @@ index d75774686..ec83962f8 100644
  
  void SurfaceFlinger::onFirstRef()
 diff --git a/services/surfaceflinger/SurfaceFlinger.h b/services/surfaceflinger/SurfaceFlinger.h
-index 980fc1f70..b992991ba 100644
+index 8566b03..c4e5881 100644
 --- a/services/surfaceflinger/SurfaceFlinger.h
 +++ b/services/surfaceflinger/SurfaceFlinger.h
-@@ -730,6 +730,8 @@ private:
+@@ -841,6 +841,8 @@ private:
      // Restrict layers to use two buffers in their bufferqueues.
      bool mLayerTripleBufferingDisabled = false;
  
-+    bool mDamageUsesScreenReference;
++    bool mDamageUsesScreenReference = false;
 +
      // these are thread safe
-     mutable MessageQueue mEventQueue;
+     mutable std::unique_ptr<MessageQueue> mEventQueue{std::make_unique<impl::MessageQueue>()};
      FrameTracker mAnimFrameTracker;
 -- 
-2.14.3
+2.7.4
 

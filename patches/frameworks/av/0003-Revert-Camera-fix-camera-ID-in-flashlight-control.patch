@@ -1,0 +1,98 @@
+From 77c4db0674ae5bee59d5d5014f47d3080f0b1b7e Mon Sep 17 00:00:00 2001
+From: Artem Borisov <dedsa2002@gmail.com>
+Date: Sun, 12 Aug 2018 23:15:16 +0300
+Subject: [PATCH 3/7] Revert "Camera: fix camera ID in flashlight control"
+
+This reverts commit 6b1f6115a8bdc825344bfdd5becd1bfb3f16d0f1.
+---
+ .../camera/libcameraservice/CameraFlashlight.cpp   | 28 +++++++++++-----------
+ .../camera/libcameraservice/CameraFlashlight.h     |  2 ++
+ 2 files changed, 16 insertions(+), 14 deletions(-)
+
+diff --git a/services/camera/libcameraservice/CameraFlashlight.cpp b/services/camera/libcameraservice/CameraFlashlight.cpp
+index 471c77d..394701a 100644
+--- a/services/camera/libcameraservice/CameraFlashlight.cpp
++++ b/services/camera/libcameraservice/CameraFlashlight.cpp
+@@ -120,15 +120,20 @@ status_t CameraFlashlight::setTorchMode(const String8& cameraId, bool enabled) {
+     return res;
+ }
+ 
++int CameraFlashlight::getNumberOfCameras() {
++    size_t len = mProviderManager->getAPI1CompatibleCameraDeviceIds().size();
++    return static_cast<int>(len);
++}
++
+ status_t CameraFlashlight::findFlashUnits() {
+     Mutex::Autolock l(mLock);
+     status_t res;
+ 
+     std::vector<String8> cameraIds;
+-    std::vector<std::string> ids = mProviderManager->getAPI1CompatibleCameraDeviceIds();
+-    int numberOfCameras = static_cast<int>(ids.size());
++    int numberOfCameras = getNumberOfCameras();
+     cameraIds.resize(numberOfCameras);
+     // No module, must be provider
++    std::vector<std::string> ids = mProviderManager->getAPI1CompatibleCameraDeviceIds();
+     for (size_t i = 0; i < cameraIds.size(); i++) {
+         cameraIds[i] = String8(ids[i].c_str());
+     }
+@@ -182,8 +187,7 @@ bool CameraFlashlight::hasFlashUnitLocked(const String8& cameraId) {
+ 
+     ssize_t index = mHasFlashlightMap.indexOfKey(cameraId);
+     if (index == NAME_NOT_FOUND) {
+-        // Might be external camera
+-        ALOGW("%s: camera %s not present when findFlashUnits() was called",
++        ALOGE("%s: camera %s not present when findFlashUnits() was called",
+                 __FUNCTION__, cameraId.string());
+         return false;
+     }
+@@ -217,13 +221,11 @@ status_t CameraFlashlight::prepareDeviceOpen(const String8& cameraId) {
+ 
+         if (mOpenedCameraIds.size() == 0) {
+             // notify torch unavailable for all cameras with a flash
+-            std::vector<std::string> ids = mProviderManager->getAPI1CompatibleCameraDeviceIds();
+-            int numCameras = static_cast<int>(ids.size());
++            int numCameras = getNumberOfCameras();
+             for (int i = 0; i < numCameras; i++) {
+-                String8 id8(ids[i].c_str());
+-                if (hasFlashUnitLocked(id8)) {
++                if (hasFlashUnitLocked(String8::format("%d", i))) {
+                     mCallbacks->onTorchStatusChanged(
+-                            id8, TorchModeStatus::NOT_AVAILABLE);
++                            String8::format("%d", i), TorchModeStatus::NOT_AVAILABLE);
+                 }
+             }
+         }
+@@ -263,13 +265,11 @@ status_t CameraFlashlight::deviceClosed(const String8& cameraId) {
+ 
+     if (isBackwardCompatibleMode(cameraId)) {
+         // notify torch available for all cameras with a flash
+-        std::vector<std::string> ids = mProviderManager->getAPI1CompatibleCameraDeviceIds();
+-        int numCameras = static_cast<int>(ids.size());
++        int numCameras = getNumberOfCameras();
+         for (int i = 0; i < numCameras; i++) {
+-            String8 id8(ids[i].c_str());
+-            if (hasFlashUnitLocked(id8)) {
++            if (hasFlashUnitLocked(String8::format("%d", i))) {
+                 mCallbacks->onTorchStatusChanged(
+-                        id8, TorchModeStatus::AVAILABLE_OFF);
++                        String8::format("%d", i), TorchModeStatus::AVAILABLE_OFF);
+             }
+         }
+     }
+diff --git a/services/camera/libcameraservice/CameraFlashlight.h b/services/camera/libcameraservice/CameraFlashlight.h
+index 1baaba2..07ce829 100644
+--- a/services/camera/libcameraservice/CameraFlashlight.h
++++ b/services/camera/libcameraservice/CameraFlashlight.h
+@@ -92,6 +92,8 @@ class CameraFlashlight : public virtual VirtualLightRefBase {
+         // opening cameras)
+         bool isBackwardCompatibleMode(const String8& cameraId);
+ 
++        int getNumberOfCameras();
++
+         sp<FlashControlBase> mFlashControl;
+ 
+         sp<CameraProviderManager> mProviderManager;
+-- 
+2.7.4
+

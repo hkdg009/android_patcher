@@ -1,0 +1,83 @@
+From ad9f556271f8790828029d944e65aa294a506b28 Mon Sep 17 00:00:00 2001
+From: Artem Borisov <dedsa2002@gmail.com>
+Date: Tue, 14 Aug 2018 13:54:21 +0300
+Subject: [PATCH 1/9] Revert "SupplicantP2pIfaceHal: Always check for existing
+ ifaces"
+
+This reverts commit 271fee2404caf4ef62a0ec17afbab24cfa0a895e.
+---
+ .../server/wifi/p2p/SupplicantP2pIfaceHal.java     |  2 --
+ .../server/wifi/p2p/SupplicantP2pIfaceHalTest.java | 23 ----------------------
+ 2 files changed, 25 deletions(-)
+
+diff --git a/service/java/com/android/server/wifi/p2p/SupplicantP2pIfaceHal.java b/service/java/com/android/server/wifi/p2p/SupplicantP2pIfaceHal.java
+index cc9af1e..82d5597 100644
+--- a/service/java/com/android/server/wifi/p2p/SupplicantP2pIfaceHal.java
++++ b/service/java/com/android/server/wifi/p2p/SupplicantP2pIfaceHal.java
+@@ -239,7 +239,6 @@ public class SupplicantP2pIfaceHal {
+      */
+     public boolean setupIface(@NonNull String ifaceName) {
+         synchronized (mLock) {
+-            if (mISupplicantP2pIface != null) return false;
+             ISupplicantIface ifaceHwBinder;
+             if (isV1_1()) {
+                 ifaceHwBinder = addIfaceV1_1(ifaceName);
+@@ -350,7 +349,6 @@ public class SupplicantP2pIfaceHal {
+      */
+     public boolean teardownIface(@NonNull String ifaceName) {
+         synchronized (mLock) {
+-            if (mISupplicantP2pIface == null) return false;
+             // Only supported for V1.1
+             if (isV1_1()) {
+                 return removeIfaceV1_1(ifaceName);
+diff --git a/tests/wifitests/src/com/android/server/wifi/p2p/SupplicantP2pIfaceHalTest.java b/tests/wifitests/src/com/android/server/wifi/p2p/SupplicantP2pIfaceHalTest.java
+index cda1aae..33dd4a6 100644
+--- a/tests/wifitests/src/com/android/server/wifi/p2p/SupplicantP2pIfaceHalTest.java
++++ b/tests/wifitests/src/com/android/server/wifi/p2p/SupplicantP2pIfaceHalTest.java
+@@ -23,7 +23,6 @@ import static org.mockito.Mockito.inOrder;
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.never;
+ import static org.mockito.Mockito.verify;
+-import static org.mockito.Mockito.verifyNoMoreInteractions;
+ import static org.mockito.Mockito.when;
+ 
+ import android.app.test.MockAnswerUtil.AnswerWithArguments;
+@@ -264,19 +263,6 @@ public class SupplicantP2pIfaceHalTest {
+     }
+ 
+     /**
+-     * Ensures that reject addition of an existing iface.
+-     */
+-    @Test
+-    public void testDuplicateSetupIfaceV1_1_Fails() throws Exception {
+-        mISupplicantMockV1_1 = mock(android.hardware.wifi.supplicant.V1_1.ISupplicant.class);
+-        executeAndValidateInitializationSequenceV1_1(false, false);
+-
+-        // Trying setting up the p2p0 interface again & ensure it fails.
+-        assertFalse(mDut.setupIface(mIfaceName));
+-        verifyNoMoreInteractions(mISupplicantMockV1_1);
+-    }
+-
+-    /**
+      * Sunny day scenario for SupplicantStaIfaceHal teardown.
+      * Asserts successful teardown.
+      * Note: Only applicable for 1.1 supplicant HAL.
+@@ -293,15 +279,6 @@ public class SupplicantP2pIfaceHalTest {
+     }
+ 
+     /**
+-     * Ensures that we reject removal of an invalid iface.
+-     */
+-    @Test
+-    public void testInvalidTeardownInterfaceV1_1_Fails() throws Exception {
+-        assertFalse(mDut.teardownIface(mIfaceName));
+-        verifyNoMoreInteractions(mISupplicantMock);
+-    }
+-
+-    /**
+      * Sunny day scenario for getName()
+      */
+     @Test
+-- 
+2.7.4
+

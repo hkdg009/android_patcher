@@ -1,0 +1,274 @@
+From ff0733daf44c45a0b9103c3f788dcf98c5b0566d Mon Sep 17 00:00:00 2001
+From: Artem Borisov <dedsa2002@gmail.com>
+Date: Tue, 14 Aug 2018 13:54:31 +0300
+Subject: [PATCH 2/9] Revert "SupplicantP2pIfaceHal: Move to an on-demand iface
+ creation model"
+
+This reverts commit da164f7e24a01a495a4bf12a4845f9266546db16.
+---
+ .../server/wifi/p2p/SupplicantP2pIfaceHal.java     | 88 ++++++----------------
+ .../server/wifi/p2p/SupplicantP2pIfaceHalTest.java | 28 +------
+ 2 files changed, 26 insertions(+), 90 deletions(-)
+
+diff --git a/service/java/com/android/server/wifi/p2p/SupplicantP2pIfaceHal.java b/service/java/com/android/server/wifi/p2p/SupplicantP2pIfaceHal.java
+index 82d5597..366b0a1 100644
+--- a/service/java/com/android/server/wifi/p2p/SupplicantP2pIfaceHal.java
++++ b/service/java/com/android/server/wifi/p2p/SupplicantP2pIfaceHal.java
+@@ -16,7 +16,6 @@
+ 
+ package com.android.server.wifi.p2p;
+ 
+-import android.annotation.NonNull;
+ import android.hardware.wifi.supplicant.V1_0.ISupplicant;
+ import android.hardware.wifi.supplicant.V1_0.ISupplicantIface;
+ import android.hardware.wifi.supplicant.V1_0.ISupplicantNetwork;
+@@ -49,7 +48,6 @@ import java.nio.ByteOrder;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
+-import java.util.NoSuchElementException;
+ import java.util.regex.Matcher;
+ import java.util.regex.Pattern;
+ import java.util.stream.Collectors;
+@@ -87,8 +85,8 @@ public class SupplicantP2pIfaceHal {
+                     Log.i(TAG, "IServiceNotification.onRegistration for: " + fqName
+                             + ", " + name + " preexisting=" + preexisting);
+                 }
+-                if (!initSupplicantService()) {
+-                    Log.e(TAG, "initalizing ISupplicant failed.");
++                if (!initSupplicantService() || !initSupplicantP2pIface()) {
++                    Log.e(TAG, "initalizing ISupplicantIfaces failed.");
+                     supplicantServiceDiedHandler();
+                 } else {
+                     Log.i(TAG, "Completed initialization of ISupplicant interfaces.");
+@@ -231,19 +229,13 @@ public class SupplicantP2pIfaceHal {
+         return true;
+     }
+ 
+-    /**
+-     * Setup the P2p iface.
+-     *
+-     * @param ifaceName Name of the interface.
+-     * @return true on success, false otherwise.
+-     */
+-    public boolean setupIface(@NonNull String ifaceName) {
++    private boolean initSupplicantP2pIface() {
+         synchronized (mLock) {
+             ISupplicantIface ifaceHwBinder;
+             if (isV1_1()) {
+-                ifaceHwBinder = addIfaceV1_1(ifaceName);
++                ifaceHwBinder = addIfaceV1_1();
+             } else {
+-                ifaceHwBinder = getIfaceV1_0(ifaceName);
++                ifaceHwBinder = getIfaceV1_0();
+             }
+             if (ifaceHwBinder == null) {
+                 Log.e(TAG, "initSupplicantP2pIface got null iface");
+@@ -254,7 +246,10 @@ public class SupplicantP2pIfaceHal {
+                 return false;
+             }
+             if (mISupplicantP2pIface != null && mMonitor != null) {
+-                mCallback = new SupplicantP2pIfaceCallback(ifaceName, mMonitor);
++                // TODO(ender): Get rid of hard-coded interface name, which is
++                // assumed to be the group interface name in several other classes
++                // ("p2p0" should probably become getName()).
++                mCallback = new SupplicantP2pIfaceCallback("p2p0", mMonitor);
+                 if (!registerCallback(mCallback)) {
+                     Log.e(TAG, "Callback registration failed. Initialization incomplete.");
+                     return false;
+@@ -264,7 +259,7 @@ public class SupplicantP2pIfaceHal {
+         }
+     }
+ 
+-    private ISupplicantIface getIfaceV1_0(@NonNull String ifaceName) {
++    private ISupplicantIface getIfaceV1_0() {
+         /** List all supplicant Ifaces */
+         final ArrayList<ISupplicant.IfaceInfo> supplicantIfaces = new ArrayList();
+         try {
+@@ -288,7 +283,7 @@ public class SupplicantP2pIfaceHal {
+         SupplicantResult<ISupplicantIface> supplicantIface =
+                 new SupplicantResult("getInterface()");
+         for (ISupplicant.IfaceInfo ifaceInfo : supplicantIfaces) {
+-            if (ifaceInfo.type == IfaceType.P2P && ifaceName.equals(ifaceInfo.name)) {
++            if (ifaceInfo.type == IfaceType.P2P) {
+                 try {
+                     mISupplicant.getInterface(ifaceInfo,
+                             (SupplicantStatus status, ISupplicantIface iface) -> {
+@@ -309,21 +304,15 @@ public class SupplicantP2pIfaceHal {
+         return supplicantIface.getResult();
+     }
+ 
+-    private ISupplicantIface addIfaceV1_1(@NonNull String ifaceName) {
++    private ISupplicantIface addIfaceV1_1() {
+         synchronized (mLock) {
+             ISupplicant.IfaceInfo ifaceInfo = new ISupplicant.IfaceInfo();
+-            ifaceInfo.name = ifaceName;
++            ifaceInfo.name = "p2p0";
+             ifaceInfo.type = IfaceType.P2P;
+             SupplicantResult<ISupplicantIface> supplicantIface =
+                     new SupplicantResult("addInterface(" + ifaceInfo + ")");
+             try {
+-                android.hardware.wifi.supplicant.V1_1.ISupplicant supplicant_v1_1 =
+-                        getSupplicantMockableV1_1();
+-                if (supplicant_v1_1 == null) {
+-                    Log.e(TAG, "Can't call addIface: ISupplicantP2pIface is null");
+-                    return null;
+-                }
+-                supplicant_v1_1.addInterface(ifaceInfo,
++                getSupplicantMockableV1_1().addInterface(ifaceInfo,
+                         (SupplicantStatus status, ISupplicantIface iface) -> {
+                             if (status.code != SupplicantStatusCode.SUCCESS
+                                     && status.code != SupplicantStatusCode.FAILURE_IFACE_EXISTS) {
+@@ -344,37 +333,17 @@ public class SupplicantP2pIfaceHal {
+     /**
+      * Teardown the P2P interface.
+      *
+-     * @param ifaceName Name of the interface.
+-     * @return true on success, false otherwise.
+-     */
+-    public boolean teardownIface(@NonNull String ifaceName) {
+-        synchronized (mLock) {
+-            // Only supported for V1.1
+-            if (isV1_1()) {
+-                return removeIfaceV1_1(ifaceName);
+-            }
+-            return true;
+-        }
+-    }
+-
+-    /**
+-     * Remove the P2p iface.
+-     *
+      * @return true on success, false otherwise.
+      */
+-    private boolean removeIfaceV1_1(@NonNull String ifaceName) {
++    public boolean removeIfaceV1_1() {
+         synchronized (mLock) {
+             try {
+-                android.hardware.wifi.supplicant.V1_1.ISupplicant supplicant_v1_1 =
+-                        getSupplicantMockableV1_1();
+-                if (supplicant_v1_1 == null) {
+-                    Log.e(TAG, "Can't call removeIface: ISupplicantP2pIface is null");
+-                    return false;
+-                }
+                 ISupplicant.IfaceInfo ifaceInfo = new ISupplicant.IfaceInfo();
+-                ifaceInfo.name = ifaceName;
++                ifaceInfo.name = "p2p0";
+                 ifaceInfo.type = IfaceType.P2P;
+-                SupplicantStatus status = supplicant_v1_1.removeInterface(ifaceInfo);
++                SupplicantStatus status =
++                        android.hardware.wifi.supplicant.V1_1.ISupplicant.castFrom(mISupplicant)
++                                .removeInterface(ifaceInfo);
+                 if (status.code != SupplicantStatusCode.SUCCESS) {
+                     Log.e(TAG, "Failed to remove iface " + status.code);
+                     return false;
+@@ -389,7 +358,6 @@ public class SupplicantP2pIfaceHal {
+             return true;
+         }
+     }
+-
+     private void supplicantServiceDiedHandler() {
+         synchronized (mLock) {
+             mISupplicant = null;
+@@ -412,7 +380,7 @@ public class SupplicantP2pIfaceHal {
+      * needed to guard calls etc.
+      */
+     public boolean isInitializationComplete() {
+-        return mISupplicant != null;
++        return mISupplicantP2pIface != null;
+     }
+ 
+     /**
+@@ -423,24 +391,14 @@ public class SupplicantP2pIfaceHal {
+     }
+ 
+     protected ISupplicant getSupplicantMockable() throws RemoteException {
+-        try {
+-            return ISupplicant.getService();
+-        } catch (NoSuchElementException e) {
+-            Log.e(TAG, "Failed to get ISupplicant", e);
+-            return null;
+-        }
++        return ISupplicant.getService();
+     }
+ 
+     protected android.hardware.wifi.supplicant.V1_1.ISupplicant getSupplicantMockableV1_1()
+             throws RemoteException {
+         synchronized (mLock) {
+-            try {
+-                return android.hardware.wifi.supplicant.V1_1.ISupplicant.castFrom(
+-                        ISupplicant.getService());
+-            } catch (NoSuchElementException e) {
+-                Log.e(TAG, "Failed to get ISupplicant", e);
+-                return null;
+-            }
++            return android.hardware.wifi.supplicant.V1_1.ISupplicant.castFrom(
++                    ISupplicant.getService());
+         }
+     }
+ 
+diff --git a/tests/wifitests/src/com/android/server/wifi/p2p/SupplicantP2pIfaceHalTest.java b/tests/wifitests/src/com/android/server/wifi/p2p/SupplicantP2pIfaceHalTest.java
+index 33dd4a6..70b5c77 100644
+--- a/tests/wifitests/src/com/android/server/wifi/p2p/SupplicantP2pIfaceHalTest.java
++++ b/tests/wifitests/src/com/android/server/wifi/p2p/SupplicantP2pIfaceHalTest.java
+@@ -177,7 +177,7 @@ public class SupplicantP2pIfaceHalTest {
+         mStatusFailure = createSupplicantStatus(SupplicantStatusCode.FAILURE_UNKNOWN);
+         mRemoteException = new RemoteException("Test Remote Exception");
+         mStaIface = createIfaceInfo(IfaceType.STA, "wlan0");
+-        mP2pIface = createIfaceInfo(IfaceType.P2P, mIfaceName);
++        mP2pIface = createIfaceInfo(IfaceType.P2P, "p2p0");
+ 
+         mIfaceInfoList = new ArrayList<ISupplicant.IfaceInfo>();
+         mIfaceInfoList.add(mStaIface);
+@@ -263,22 +263,6 @@ public class SupplicantP2pIfaceHalTest {
+     }
+ 
+     /**
+-     * Sunny day scenario for SupplicantStaIfaceHal teardown.
+-     * Asserts successful teardown.
+-     * Note: Only applicable for 1.1 supplicant HAL.
+-     */
+-    @Test
+-    public void testTeardown_successV1_1() throws Exception {
+-        mISupplicantMockV1_1 = mock(android.hardware.wifi.supplicant.V1_1.ISupplicant.class);
+-        executeAndValidateInitializationSequenceV1_1(false, false);
+-
+-        when(mISupplicantMockV1_1.removeInterface(any(ISupplicant.IfaceInfo.class)))
+-                .thenReturn(mStatusSuccess);
+-        assertTrue(mDut.teardownIface(mIfaceName));
+-        verify(mISupplicantMockV1_1).removeInterface(any());
+-    }
+-
+-    /**
+      * Sunny day scenario for getName()
+      */
+     @Test
+@@ -2591,11 +2575,8 @@ public class SupplicantP2pIfaceHalTest {
+         mServiceNotificationCaptor.getValue().onRegistration(ISupplicant.kInterfaceName, "", true);
+         mInOrder.verify(mISupplicantMock).linkToDeath(
+                 any(IHwBinder.DeathRecipient.class), anyLong());
+-        assertEquals(true, mDut.isInitializationComplete());
+-
+-        // Now setup the iface.
+-        assertTrue(mDut.setupIface(mIfaceName) == shouldSucceed);
+ 
++        assertEquals(shouldSucceed, mDut.isInitializationComplete());
+         // verify: listInterfaces is called
+         mInOrder.verify(mISupplicantMock).listInterfaces(
+                 any(ISupplicant.listInterfacesCallback.class));
+@@ -2645,11 +2626,8 @@ public class SupplicantP2pIfaceHalTest {
+         mServiceNotificationCaptor.getValue().onRegistration(ISupplicant.kInterfaceName, "", true);
+         mInOrder.verify(mISupplicantMock).linkToDeath(
+                 any(IHwBinder.DeathRecipient.class), anyLong());
+-        assertEquals(true, mDut.isInitializationComplete());
+-
+-        // Now setup the iface.
+-        assertTrue(mDut.setupIface(mIfaceName) == shouldSucceed);
+ 
++        assertEquals(shouldSucceed, mDut.isInitializationComplete());
+         // verify: addInterface is called
+         mInOrder.verify(mISupplicantMockV1_1)
+                 .addInterface(any(ISupplicant.IfaceInfo.class),
+-- 
+2.7.4
+
